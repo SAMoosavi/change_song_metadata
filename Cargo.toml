@@ -1,0 +1,8 @@
+[package]
+name = "change_songe_metadata"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lofty = "0.22.0"
+taglib = "1.0.0"
