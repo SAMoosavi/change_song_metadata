@@ -5,4 +5,6 @@ edition = "2021"
 
 [dependencies]
 lofty = "0.22.0"
+rayon = "1.10.0"
 taglib = "1.0.0"
+zip = "2.2.2"
