@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use std::{
     fs::{self, File},
     io,
-    path::Path,
+    path::{Path, PathBuf},
 };
 use zip::{read::ZipArchive, result::ZipResult};
 
@@ -53,7 +53,7 @@ fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> ZipResult<()> {
     Ok(())
 }
 
-fn zip_handler(path: &Path) -> ZipResult<()> {
+fn zip_handler(path: &Path) -> ZipResult<PathBuf> {
     let name = path.file_stem().and_then(|t| t.to_str()).unwrap();
     let album_name: Vec<_> = name.split('-').map(|s| s.trim()).collect();
     let singer_dir = path.parent().unwrap().join(album_name[0]);
@@ -61,7 +61,8 @@ fn zip_handler(path: &Path) -> ZipResult<()> {
     let album_dir = singer_dir.join(album_name[1]);
     create_dir_if_not_exists(&album_dir)?;
 
-    extract_zip_to_dir(&path, &album_dir)
+    extract_zip_to_dir(&path, &album_dir)?;
+    Ok(album_dir)
 }
 
 fn is_song(path: &Path) -> bool {
@@ -85,10 +86,11 @@ fn song_handler(path: &Path) -> error::Result<()> {
         .split('-')
         .map(|s| s.trim())
         .collect();
-    let title_name = if title[0].ends_with(&artist_name) {
-        title[1]
+ 
+    let title_name = if title.len() > 1 && title[0].ends_with(&artist_name) {
+        title[1..title.len()].join(" ")
     } else {
-        title[0]
+        title[0].to_string()
     };
 
     let mut tagged_file = lofty::read_from_path(&path)?;
@@ -119,11 +121,13 @@ fn dir_handler(dir_path: &Path) -> io::Result<()> {
             }
         } else if path.is_file() {
             if is_zip_file(&path) {
-                if let Err(e) = zip_handler(&path) {
-                    eprintln!("Error extracting ZIP file {}: {}", path.display(), e);
-                }
-                if let Err(e) = dir_handler(&dir_path) {
-                    eprintln!("Error processing directory {}: {}", dir_path.display(), e);
+                match zip_handler(&path) {
+                    Err(e) => eprintln!("Error extracting ZIP file {}: {}", path.display(), e),
+                    Ok(new_dir) => {
+                        if let Err(e) = dir_handler(&new_dir) {
+                            eprintln!("Error processing directory {}: {}", new_dir.display(), e);
+                        }
+                    }
                 }
             } else if is_song(&path) {
                 if let Err(e) = song_handler(&path) {
