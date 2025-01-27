@@ -72,32 +72,48 @@ fn is_song(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+trait MyStr {
+    fn clear_str(&mut self) -> String;
+}
+
+impl MyStr for &str {
+    fn clear_str(&mut self) -> String {
+        self.replace("_", "-")
+            .replace(".", "-")
+            .replace(" ", "-")
+            .replace("128", "")
+            .replace("320", "")
+            .replace("()", "")
+            .replace("[]", "")
+            .to_lowercase()
+    }
+}
+
 fn song_handler(path: &Path) -> error::Result<()> {
     let parent = path.parent().unwrap();
     let dir: Vec<_> = parent.iter().rev().collect();
-    let album_name = dir[0].to_str().unwrap().to_string();
-    let artist_name = dir[1].to_str().unwrap().to_string();
+    let album_name = dir[0].to_str().unwrap().clear_str();
 
-    let title: Vec<_> = path
+    let artist_name = dir[1].to_str().unwrap().clear_str();
+
+    let title_name = path
         .file_stem()
         .unwrap()
         .to_str()
         .unwrap()
+        .clear_str()
         .split('-')
         .map(|s| s.trim())
-        .collect();
- 
-    let title_name = if title.len() > 1 && title[0].ends_with(&artist_name) {
-        title[1..title.len()].join(" ")
-    } else {
-        title[0].to_string()
-    };
+        .filter(|f| f != &"" && f != &artist_name)
+        .collect::<Vec<_>>()
+        .join(" ");
 
     let mut tagged_file = lofty::read_from_path(&path)?;
     if let Some(tag) = tagged_file.primary_tag_mut() {
         tag.set_artist(artist_name);
         tag.set_album(album_name);
-        tag.set_title(title_name.to_string());
+        tag.set_title(title_name);
+        tag.set_comment("".to_string());
     }
 
     tagged_file.save_to_path(&path, WriteOptions::default())?;
@@ -144,7 +160,7 @@ fn dir_handler(dir_path: &Path) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    let base_path = "/home/moosavi/Downloads";
+    let base_path = "/media/moosavi/files/music/Ramesh";
 
     if Path::new(base_path).is_dir() {
         dir_handler(Path::new(base_path))?;
