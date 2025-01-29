@@ -80,7 +80,6 @@ impl MyStr for &str {
     fn clear_str(&mut self) -> String {
         self.replace("_", "-")
             .replace(".", "-")
-            .replace(" ", "-")
             .replace("128", "")
             .replace("320", "")
             .replace("()", "")
@@ -160,7 +159,7 @@ fn dir_handler(dir_path: &Path) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    let base_path = "/media/moosavi/files/music/Ramesh";
+    let base_path = "/home/moosavi/Downloads/";
 
     if Path::new(base_path).is_dir() {
         dir_handler(Path::new(base_path))?;
