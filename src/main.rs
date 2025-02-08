@@ -112,7 +112,7 @@ fn song_handler(path: &Path) -> error::Result<()> {
         tag.set_artist(artist_name);
         tag.set_album(album_name);
         tag.set_title(title_name);
-        tag.set_comment("".to_string());
+        tag.remove_comment();
     }
 
     tagged_file.save_to_path(&path, WriteOptions::default())?;
