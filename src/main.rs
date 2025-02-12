@@ -12,10 +12,65 @@ use std::{
 };
 use zip::{read::ZipArchive, result::ZipResult};
 
+#[derive(Clone)]
+enum Change {
+    Disable,
+    Auto,
+    Default(String),
+}
+
+struct Conf {
+    file_path: PathBuf,
+    artist: Change,
+    album: Change,
+    remove_other_file: bool,
+    remove_zip_file: bool,
+    move_to_parent: bool,
+}
+
+impl Conf {
+    fn copy_from_file_path(&self, file_path: PathBuf) -> Self {
+        Self {
+            file_path,
+            artist: self.artist.clone(),
+            album: self.album.clone(),
+            remove_other_file: self.remove_other_file,
+            remove_zip_file: self.remove_zip_file,
+            move_to_parent: self.move_to_parent,
+        }
+    }
+    fn display(&self) -> std::path::Display<'_> {
+        self.file_path.display()
+    }
+}
+
+trait MyStr {
+    fn clear_str(&mut self) -> String;
+}
+
+impl MyStr for &str {
+    fn clear_str(&mut self) -> String {
+        self.replace("_", "-")
+            .replace(".", "-")
+            .replace("128", "")
+            .replace("320", "")
+            .replace("()", "")
+            .replace("[]", "")
+            .to_lowercase()
+    }
+}
+
 fn is_zip_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false)
+}
+
+fn is_song(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("mp3"))
         .unwrap_or(false)
 }
 
@@ -36,24 +91,16 @@ fn move_to(src: &Path, dst: &Path) -> ZipResult<()> {
             let new_path = dst.join(path.file_name().unwrap());
             fs::rename(&path, &new_path)?;
         } else if path.is_dir() {
-            move_to(&path, &dst)?;
-            fs::remove_dir(&path)?;
+            move_to(&path, dst)?;
+            fs::remove_dir(path)?;
         }
     }
     Ok(())
 }
 
-fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> ZipResult<()> {
-    let file = File::open(zip_path)?;
-    let mut archive = ZipArchive::new(file)?;
+fn zip_handler(conf: &Conf) -> ZipResult<PathBuf> {
+    let path = &conf.file_path;
 
-    archive.extract(dest_dir)?;
-    move_to(dest_dir, dest_dir)?;
-    fs::remove_file(&zip_path).unwrap();
-    Ok(())
-}
-
-fn zip_handler(path: &Path) -> ZipResult<PathBuf> {
     let name = path.file_stem().and_then(|t| t.to_str()).unwrap();
     let album_name: Vec<_> = name.split('-').map(|s| s.trim()).collect();
     let singer_dir = path.parent().unwrap().join(album_name[0]);
@@ -61,41 +108,28 @@ fn zip_handler(path: &Path) -> ZipResult<PathBuf> {
     let album_dir = singer_dir.join(album_name[1]);
     create_dir_if_not_exists(&album_dir)?;
 
-    extract_zip_to_dir(&path, &album_dir)?;
+    let file = File::open(path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    archive.extract(&album_dir)?;
+    move_to(&album_dir, &album_dir)?;
+
+    if conf.remove_zip_file {
+        fs::remove_file(path).unwrap();
+    }
+
     Ok(album_dir)
 }
 
-fn is_song(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("mp3"))
-        .unwrap_or(false)
-}
-
-trait MyStr {
-    fn clear_str(&mut self) -> String;
-}
-
-impl MyStr for &str {
-    fn clear_str(&mut self) -> String {
-        self.replace("_", "-")
-            .replace(".", "-")
-            .replace("128", "")
-            .replace("320", "")
-            .replace("()", "")
-            .replace("[]", "")
-            .to_lowercase()
-    }
-}
-
-fn song_handler(path: &Path) -> error::Result<()> {
-    let parent = path.parent().unwrap();
+fn song_handler(conf: &Conf) -> error::Result<()> {
+    let parent = conf.file_path.parent().unwrap();
     let dir: Vec<_> = parent.iter().rev().collect();
     let album_name = dir[0].to_str().unwrap().clear_str();
 
     let artist_name = dir[1].to_str().unwrap().clear_str();
 
-    let title_name = path
+    let title_name = conf
+        .file_path
         .file_stem()
         .unwrap()
         .to_str()
@@ -107,75 +141,92 @@ fn song_handler(path: &Path) -> error::Result<()> {
         .collect::<Vec<_>>()
         .join(" ");
 
-    let mut tagged_file = lofty::read_from_path(&path)?;
+    let mut tagged_file = lofty::read_from_path(&conf.file_path)?;
     if let Some(tag) = tagged_file.primary_tag_mut() {
-        tag.set_artist(artist_name);
-        tag.set_album(album_name);
+        match &conf.album {
+            Change::Disable => {}
+            Change::Auto => tag.set_album(album_name),
+            Change::Default(s) => tag.set_album(s.to_string()),
+        }
+        match &conf.artist {
+            Change::Disable => {}
+            Change::Auto => tag.set_artist(artist_name),
+            Change::Default(s) => tag.set_artist(s.to_string()),
+        }
         tag.set_title(title_name);
         tag.remove_comment();
     }
 
-    tagged_file.save_to_path(&path, WriteOptions::default())?;
+    tagged_file.save_to_path(&conf.file_path, WriteOptions::default())?;
 
-    fs::rename(
-        &path,
-        parent.parent().unwrap().join(path.file_name().unwrap()),
-    )?;
+    if conf.move_to_parent {
+        fs::rename(
+            &conf.file_path,
+            parent
+                .parent()
+                .unwrap()
+                .join(conf.file_path.file_name().unwrap()),
+        )?;
+    }
 
     Ok(())
 }
 
-fn dir_handler(dir_path: &Path) -> io::Result<()> {
-    let entries: Vec<_> = fs::read_dir(dir_path)?.filter_map(Result::ok).collect();
+fn dir_handler(conf: &Conf) -> io::Result<()> {
+    let entries: Vec<_> = fs::read_dir(&conf.file_path)?
+        .filter_map(Result::ok)
+        .collect();
 
     entries.par_iter().for_each(|entry| {
         let path = entry.path();
-        if path.is_dir() {
-            if let Err(e) = dir_handler(&path) {
-                eprintln!("Error processing directory {}: {}", path.display(), e);
-            }
-        } else if path.is_file() {
-            if is_zip_file(&path) {
-                match zip_handler(&path) {
-                    Err(e) => eprintln!("Error extracting ZIP file {}: {}", path.display(), e),
-                    Ok(new_dir) => {
-                        if let Err(e) = dir_handler(&new_dir) {
-                            eprintln!("Error processing directory {}: {}", new_dir.display(), e);
-                        }
-                    }
-                }
-            } else if is_song(&path) {
-                if let Err(e) = song_handler(&path) {
-                    eprintln!("Error handling song file {}: {}", path.display(), e);
-                }
-            } else {
-                if let Err(e) = fs::remove_file(&path) {
-                    eprintln!("Error deleting file {}: {}", path.display(), e);
-                }
-            }
-        }
+        handler(&conf.copy_from_file_path(path))
     });
     Ok(())
+}
+
+fn handler(conf: &Conf) {
+    let path = &conf.file_path;
+
+    if path.is_dir() {
+        if let Err(e) = dir_handler(conf) {
+            eprintln!("Error processing directory {}: {}", path.display(), e);
+        }
+    } else if path.is_file() {
+        if is_zip_file(path) {
+            match zip_handler(conf) {
+                Err(e) => eprintln!("Error extracting ZIP file {}: {}", path.display(), e),
+                Ok(new_dir) => {
+                    let new_conf = conf.copy_from_file_path(new_dir);
+                    if let Err(e) = dir_handler(&new_conf) {
+                        eprintln!("Error processing directory {}: {}", new_conf.display(), e);
+                    }
+                }
+            }
+        } else if is_song(path) {
+            if let Err(e) = song_handler(conf) {
+                eprintln!("Error handling song file {}: {}", path.display(), e);
+            }
+        } else if conf.remove_other_file {
+            if let Err(e) = fs::remove_file(path) {
+                eprintln!("Error deleting file {}: {}", path.display(), e);
+            }
+        }
+    }
 }
 
 fn main() -> io::Result<()> {
     let base_path = "/home/moosavi/Downloads/";
 
-    if Path::new(base_path).is_dir() {
-        dir_handler(Path::new(base_path))?;
-    } else {
-        let mut tagged_file = lofty::read_from_path(base_path).expect("bad");
+    let conf = Conf {
+        file_path: base_path.into(),
+        album: Change::Auto,
+        artist: Change::Auto,
+        remove_other_file: true,
+        remove_zip_file: true,
+        move_to_parent: true,
+    };
 
-        if let Some(tag) = tagged_file.primary_tag_mut() {
-            tag.set_title("Khabe Baroon".to_string());
-            tag.set_artist("Siavash Ghomayshi".to_string());
-            tag.set_album("Single Song".to_string());
-        }
-
-        tagged_file
-            .save_to_path(&base_path, WriteOptions::default())
-            .expect("bad");
-    }
+    handler(&conf);
     println!("Metadata updated successfully!");
     Ok(())
 }
