@@ -26,6 +26,7 @@ struct Conf {
     remove_other_file: bool,
     remove_zip_file: bool,
     move_to_parent: bool,
+    change: bool,
 }
 
 impl Conf {
@@ -37,6 +38,7 @@ impl Conf {
             remove_other_file: self.remove_other_file,
             remove_zip_file: self.remove_zip_file,
             move_to_parent: self.move_to_parent,
+            change: self.change,
         }
     }
     fn display(&self) -> std::path::Display<'_> {
@@ -214,8 +216,63 @@ fn handler(conf: &Conf) {
     }
 }
 
+fn create_dir_for_albums(conf: &Conf) -> io::Result<()> {
+    let entries: Vec<_> = fs::read_dir(&conf.file_path)?
+        .filter_map(Result::ok)
+        .collect();
+
+    entries.par_iter().for_each(|entry| {
+        let path = entry.path();
+        create_dir_handler(&conf.copy_from_file_path(path))
+    });
+    Ok(())
+}
+
+fn create_dir_handler(conf: &Conf) {
+    let path = &conf.file_path;
+    if path.is_dir() {
+        if let Err(e) = create_dir_for_albums(conf) {
+            eprintln!("Error processing directory {}: {}", path.display(), e);
+        }
+    } else if path.is_file() {
+        if is_song(path) {
+            if let Err(e) = create_dir_song_handler(conf) {
+                eprintln!("Error handling song file {}: {}", path.display(), e);
+            }
+        }
+    }
+}
+
+fn create_dir_song_handler(conf: &Conf) -> error::Result<()> {
+    let parent = conf.file_path.parent().unwrap();
+
+    let album_name;
+
+    let mut tagged_file = lofty::read_from_path(&conf.file_path)?;
+    match tagged_file.primary_tag_mut() {
+        Some(tag) => {
+            album_name = match tag.album() {
+                Some(x) => x.to_string(),
+                None => "unknow".to_string(),
+            };
+        }
+        None => return Ok(()),
+    }
+
+    let dir_path = parent.join(album_name);
+    create_dir_if_not_exists(&dir_path)?;
+    if conf.move_to_parent {
+        fs::rename(
+            &conf.file_path,
+            dir_path.join(conf.file_path.file_name().unwrap()),
+        )?;
+    }
+
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
-    let base_path = "/home/moosavi/Downloads/";
+    let base_path = "/media/moosavi/files/music";
 
     let conf = Conf {
         file_path: base_path.into(),
@@ -224,9 +281,13 @@ fn main() -> io::Result<()> {
         remove_other_file: true,
         remove_zip_file: true,
         move_to_parent: true,
+        change: true,
     };
-
-    handler(&conf);
-    println!("Metadata updated successfully!");
+    if conf.change {
+        handler(&conf);
+    } else {
+        create_dir_handler(&conf);
+    }
+    println!("successfully!");
     Ok(())
 }
