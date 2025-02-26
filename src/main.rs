@@ -1,3 +1,4 @@
+use clap::{Parser, ValueEnum};
 use lofty::{
     config::WriteOptions,
     error,
@@ -5,27 +6,50 @@ use lofty::{
     tag::Accessor,
 };
 use rayon::prelude::*;
+use zip::{read::ZipArchive, result::ZipResult};
+
 use std::{
+    fmt,
     fs::{self, File},
     io,
     path::{Path, PathBuf},
 };
-use zip::{read::ZipArchive, result::ZipResult};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, ValueEnum)]
 enum Change {
     Disable,
     Auto,
+    #[clap(skip)] // Skip the `Default(String)` variant for `ValueEnum`
     Default(String),
 }
 
+// Manually implement `ToString` for `Change`
+impl fmt::Display for Change {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Change::Disable => write!(f, "disable"),
+            Change::Auto => write!(f, "auto"),
+            Change::Default(value) => write!(f, "default={}", value),
+        }
+    }
+}
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
 struct Conf {
+    #[arg(short, long)]
     file_path: PathBuf,
+    #[arg(short, long, default_value_t =  Change::Auto)]
     artist: Change,
+    #[arg(short, long, default_value_t =  Change::Auto)]
     album: Change,
+    #[arg(short, long, default_value_t = true)]
     remove_other_file: bool,
+    #[arg(short, long, default_value_t = true)]
     remove_zip_file: bool,
+    #[arg(short, long, default_value_t = false)]
     move_to_parent: bool,
+    #[arg(short, long, default_value_t = true)]
     change: bool,
 }
 
@@ -272,17 +296,7 @@ fn create_dir_song_handler(conf: &Conf) -> error::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    let base_path = "/media/moosavi/files/music";
-
-    let conf = Conf {
-        file_path: base_path.into(),
-        album: Change::Auto,
-        artist: Change::Auto,
-        remove_other_file: true,
-        remove_zip_file: true,
-        move_to_parent: true,
-        change: true,
-    };
+    let conf = Conf::parse();
     if conf.change {
         handler(&conf);
     } else {
