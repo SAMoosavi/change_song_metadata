@@ -43,6 +43,8 @@ struct Conf {
     artist: Change,
     #[arg(short, long, default_value_t =  Change::Auto)]
     album: Change,
+    #[arg(short, long, default_value_t =  Change::Auto)]
+    title: Change,
     #[arg(short, long, default_value_t = true)]
     remove_other_file: bool,
     #[arg(short, long, default_value_t = true)]
@@ -59,6 +61,7 @@ impl Conf {
             file_path,
             artist: self.artist.clone(),
             album: self.album.clone(),
+            title: self.title.clone(),
             remove_other_file: self.remove_other_file,
             remove_zip_file: self.remove_zip_file,
             move_to_parent: self.move_to_parent,
@@ -150,36 +153,49 @@ fn zip_handler(conf: &Conf) -> ZipResult<PathBuf> {
 fn song_handler(conf: &Conf) -> error::Result<()> {
     let parent = conf.file_path.parent().unwrap();
     let dir: Vec<_> = parent.iter().rev().collect();
-    let album_name = dir[0].to_str().unwrap().clear_str();
 
-    let artist_name = dir[1].to_str().unwrap().clear_str();
-
-    let title_name = conf
-        .file_path
-        .file_stem()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .clear_str()
-        .split('-')
-        .map(|s| s.trim())
-        .filter(|f| f != &"" && f != &artist_name)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let artist_name = dir[1].to_str().unwrap_or_else(|| "unknown").clear_str();
 
     let mut tagged_file = lofty::read_from_path(&conf.file_path)?;
     if let Some(tag) = tagged_file.primary_tag_mut() {
         match &conf.album {
             Change::Disable => {}
-            Change::Auto => tag.set_album(album_name),
+            Change::Auto => {
+                let album_name = dir[0].to_str().unwrap_or_else(|| "unknown").clear_str();
+
+                let album_name = if album_name == "single song" {
+                    format!("{album_name} - {artist_name}")
+                } else {
+                    album_name
+                };
+                tag.set_album(album_name)
+            }
             Change::Default(s) => tag.set_album(s.to_string()),
         }
         match &conf.artist {
             Change::Disable => {}
-            Change::Auto => tag.set_artist(artist_name),
+            Change::Auto => tag.set_artist(artist_name.clone()),
             Change::Default(s) => tag.set_artist(s.to_string()),
         }
-        tag.set_title(title_name);
+        match &conf.title {
+            Change::Disable => {}
+            Change::Auto => {
+                let title_name = conf
+                    .file_path
+                    .file_stem()
+                    .unwrap()
+                    .to_str()
+                    .unwrap_or_else(|| "unknown")
+                    .clear_str()
+                    .split('-')
+                    .map(|s| s.trim())
+                    .filter(|f| f != &"" && f != &artist_name)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                tag.set_title(title_name)
+            }
+            Change::Default(s) => tag.set_artist(s.to_string()),
+        }
         tag.remove_comment();
     }
 
@@ -277,7 +293,7 @@ fn create_dir_song_handler(conf: &Conf) -> error::Result<()> {
         Some(tag) => {
             album_name = match tag.album() {
                 Some(x) => x.to_string(),
-                None => "unknow".to_string(),
+                None => "unknown".to_string(),
             };
         }
         None => return Ok(()),
@@ -295,13 +311,11 @@ fn create_dir_song_handler(conf: &Conf) -> error::Result<()> {
     Ok(())
 }
 
-fn main() -> io::Result<()> {
+fn main() {
     let conf = Conf::parse();
     if conf.change {
         handler(&conf);
     } else {
         create_dir_handler(&conf);
     }
-    println!("successfully!");
-    Ok(())
 }
