@@ -13,13 +13,14 @@ use std::{
     fs::{self, File},
     io,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
 };
 
 #[derive(Clone, Debug, ValueEnum)]
 enum Change {
     Disable,
     Auto,
-    #[clap(skip)] // Skip the `Default(String)` variant for `ValueEnum`
+    #[clap(skip)]
     Default(String),
 }
 
@@ -40,25 +41,25 @@ struct Conf {
     #[arg(short, long)]
     file_path: PathBuf,
 
-    #[arg(short, long, default_value_t =  Change::Auto)]
+    #[arg(long, default_value_t =  Change::Auto)]
     artist: Change,
 
-    #[arg(short, long, default_value_t =  Change::Auto)]
+    #[arg(long, default_value_t =  Change::Auto)]
     album: Change,
 
-    #[arg(short, long, default_value_t =  Change::Auto)]
+    #[arg(long, default_value_t =  Change::Auto)]
     title: Change,
 
-    #[arg(short, long, default_value_t = true)]
+    #[arg(long, default_value_t = false)]
     remove_other_file: bool,
 
-    #[arg(short, long, default_value_t = true)]
+    #[arg(long, default_value_t = false)]
     remove_zip_file: bool,
 
-    #[arg(short, long, default_value_t = false)]
+    #[arg(long, default_value_t = false)]
     move_to_parent: bool,
 
-    #[arg(short, long, default_value_t = true)]
+    #[arg(long, default_value_t = true)]
     change: bool,
 }
 
@@ -138,10 +139,10 @@ fn zip_handler(conf: &Conf) -> ZipResult<PathBuf> {
     let path = &conf.file_path;
 
     let name = path.file_stem().and_then(|t| t.to_str()).unwrap();
-    let album_name: Vec<_> = name.split('-').map(|s| s.trim()).collect();
-    let singer_dir = path.parent().unwrap().join(album_name[0]);
+    let album_name: Vec<_> = name.split('-').map(|s| s.trim().to_lowercase()).collect();
+    let singer_dir = path.parent().unwrap().join(&album_name[0]);
     create_dir_if_not_exists(&singer_dir)?;
-    let album_dir = singer_dir.join(album_name[1]);
+    let album_dir = singer_dir.join(&album_name.get(1).unwrap_or(&"fuck".to_string()));
     create_dir_if_not_exists(&album_dir)?;
 
     let file = File::open(path)?;
@@ -163,19 +164,34 @@ fn song_handler(conf: &Conf) -> error::Result<()> {
 
     let artist_name = dir[1].to_str().unwrap_or("unknown").clear_str();
 
-    let mut tagged_file = lofty::read_from_path(&conf.file_path)?;
+    let mut tagged_file = match lofty::read_from_path(&conf.file_path) {
+        Ok(x) => x,
+        Err(_) => {
+            let file_path = &conf.file_path.to_str().unwrap();
+            let ofile_path = format!("{}.fix.mp3", &conf.file_path.to_str().unwrap());
+
+            Command::new("ffmpeg")
+                .args(["-i", file_path, "-codec", "copy", &ofile_path])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?;
+            fs::rename(&ofile_path, file_path)?;
+
+            lofty::read_from_path(file_path)?
+        }
+    };
     if let Some(tag) = tagged_file.primary_tag_mut() {
         match &conf.album {
             Change::Disable => {}
             Change::Auto => {
-                let album_name = dir[0].to_str().unwrap_or("unknown").clear_str();
+                let album_name = dir[0].to_str().unwrap_or("single songs").clear_str();
 
-                let album_name = if album_name == "single song" {
+                let album_name = if album_name == "single songs" {
                     format!("{album_name} - {artist_name}")
                 } else {
                     album_name
                 };
-                tag.set_album(album_name)
+                tag.set_album(album_name);
             }
             Change::Default(s) => tag.set_album(s.to_string()),
         }
@@ -204,21 +220,49 @@ fn song_handler(conf: &Conf) -> error::Result<()> {
             Change::Default(s) => tag.set_artist(s.to_string()),
         }
         tag.remove_comment();
+
+        match tagged_file.save_to_path(&conf.file_path, WriteOptions::default()) {
+            Ok(_) => {
+                println!("update: {}", conf.display());
+
+                if conf.move_to_parent {
+                    fs::rename(
+                        &conf.file_path,
+                        parent
+                            .parent()
+                            .unwrap()
+                            .join(conf.file_path.file_name().unwrap()),
+                    )?;
+                }
+
+                Ok(())
+            }
+            Err(_) => {
+                let file_path = &conf.file_path.to_str().unwrap();
+                let ofile_path = format!("{}.fix.mp3", &conf.file_path.to_str().unwrap());
+
+                Command::new("ffmpeg")
+                    .args([
+                        "-i",
+                        file_path,
+                        "-map_metadata",
+                        "-1",
+                        "-c:a",
+                        "copy",
+                        &ofile_path,
+                        "-y",
+                    ])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()?;
+                fs::rename(&ofile_path, file_path)?;
+
+                song_handler(conf)
+            }
+        }
+    } else {
+        Err(error::LoftyError::new(error::ErrorKind::UnsupportedTag))
     }
-
-    tagged_file.save_to_path(&conf.file_path, WriteOptions::default())?;
-
-    if conf.move_to_parent {
-        fs::rename(
-            &conf.file_path,
-            parent
-                .parent()
-                .unwrap()
-                .join(conf.file_path.file_name().unwrap()),
-        )?;
-    }
-
-    Ok(())
 }
 
 fn dir_handler(conf: &Conf) -> io::Result<()> {
@@ -295,7 +339,7 @@ fn create_dir_song_handler(conf: &Conf) -> error::Result<()> {
     let album_name = match tagged_file.primary_tag_mut() {
         Some(tag) => match tag.album() {
             Some(x) => x.to_string(),
-            None => "unknown".to_string(),
+            None => "single songs".to_string(),
         },
         None => return Ok(()),
     };
