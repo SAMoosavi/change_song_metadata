@@ -3,7 +3,9 @@ use lofty::{
     file::{AudioFile, TaggedFile, TaggedFileExt},
     tag::Accessor,
 };
+use once_cell::sync::Lazy;
 use rayon::prelude::*;
+use regex::Regex;
 use zip::{read::ZipArchive, result::ZipError};
 
 use std::{
@@ -25,10 +27,14 @@ trait MyStr {
 
 impl MyStr for &str {
     fn clean(&self) -> String {
-        let mut result = self.to_lowercase();
-        result = result.replace(['_', '.'], "-");
-        result = result.replace("128", "").replace("320", "");
-        result.replace("()", "").replace("[]", "")
+        self.replace('.', "-")
+            .replace("128", "")
+            .replace("192", "")
+            .replace("320", "")
+            .replace("()", "")
+            .replace("[]", "")
+            .trim()
+            .to_lowercase()
     }
 }
 enum ArchiveType {
@@ -70,7 +76,14 @@ pub fn change_metadata(conf: &Conf) -> Result<(), Box<dyn Error>> {
                     let new_conf = conf.copy_from_file_path(new_dir);
                     handle_dir(&new_conf)
                 }),
-                ArchiveType::Unsupported => Ok(()),
+                ArchiveType::Unsupported => {
+                    println!(
+                        "⚠️  The file '{}' is an archive, but its format is unsupported. Please ensure it's a valid archive file.",
+                        path.display()
+                    );
+
+                    Ok(())
+                },
             }
         } else if is_audio_file(path) {
             song_handler(conf)
@@ -185,6 +198,37 @@ fn song_handler(conf: &Conf) -> Result<(), Box<dyn Error>> {
     save_and_move_file(conf, tagged_file, parent)
 }
 
+fn get_name_and_track_number(filename: &str, artist_name: &str) -> (Option<u32>, String) {
+    let filename = filename.replace(artist_name, "").replace('-', " ").trim().to_string();
+
+    // Pattern 1: 01) my song
+    static RE1: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?x)(?P<track>\d{2})[^a-zA-Z]*(?P<name>[a-zA-Z0-9\(\)\[\],\s]+)").unwrap());
+    if let Some(captures) = RE1.captures(&filename) {
+        let track = captures.name("track").map(|m| m.as_str().parse().unwrap());
+        let name = captures.name("name").unwrap().as_str().trim().to_string();
+        return (track, name);
+    }
+
+    // Pattern 2: some text - name
+    static RE2: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?x)[a-zA-Z\& ]*-(?P<name>[a-zA-Z0-9 ]*)").unwrap());
+    if let Some(captures) = RE2.captures(&filename) {
+        let name = captures.name("name").unwrap().as_str().trim().to_string();
+        return (None, name);
+    }
+
+    // Pattern 3: some_text_here (replace underscores and handle a specific word)
+    let replaced = filename.replace('_', " ");
+
+    let final_string = if replaced.contains(artist_name) {
+        replaced.replace(artist_name, "").trim().to_string()
+    } else {
+        replaced.trim().to_string()
+    };
+
+    (None, final_string)
+}
+
 fn process_tags(conf: &Conf, tagged_file: &mut TaggedFile, parent: &Path) -> Result<(), Box<dyn Error>> {
     let dir_components: Vec<_> = parent.iter().rev().filter_map(|s| s.to_str()).collect();
 
@@ -220,16 +264,13 @@ fn process_tags(conf: &Conf, tagged_file: &mut TaggedFile, parent: &Path) -> Res
                 .file_path
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .map_or("unknown".to_string(), |s| s.clean());
+                .map(|s| s.clean())
+                .unwrap();
 
-            let clean_title = title
-                .split('-')
-                .map(|s| s.trim())
-                .filter(|f| !f.is_empty() && f != &artist_name)
-                .collect::<Vec<_>>()
-                .join(" ");
+            let (track, title) = get_name_and_track_number(&title, &artist_name);
 
-            tag.set_title(clean_title)
+            track.inspect(|track| tag.set_track(*track));
+            tag.set_title(title.split_whitespace().collect::<Vec<&str>>().join(" "))
         },
         Change::Default(s) => tag.set_artist(s.to_string()),
     }
@@ -241,7 +282,7 @@ fn process_tags(conf: &Conf, tagged_file: &mut TaggedFile, parent: &Path) -> Res
 fn save_and_move_file(conf: &Conf, tagged_file: TaggedFile, parent: &Path) -> Result<(), Box<dyn Error>> {
     match tagged_file.save_to_path(&conf.file_path, WriteOptions::default()) {
         Ok(_) => {
-            println!("Updated metadata for {}", conf);
+            println!("✅ Successfully updated metadata for: {}", conf);
 
             if conf.move_to_parent {
                 let new_parent = parent.parent().ok_or("No grandparent directory")?;
