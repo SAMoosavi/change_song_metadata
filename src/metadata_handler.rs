@@ -52,15 +52,15 @@ impl ArchiveType {
 fn archive_type(path: &Path) -> ArchiveType {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map_or(ArchiveType::Unsupported, |ext| ArchiveType::from_str(ext))
+        .map_or(ArchiveType::Unsupported, ArchiveType::from_str)
 }
 
 fn is_archive_file(path: &Path) -> bool {
     const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "rar", "tar", "7z", "gz"];
 
-    path.extension().and_then(|ext| ext.to_str()).map_or(false, |ext| {
-        ARCHIVE_EXTENSIONS.iter().any(|&x| ext.eq_ignore_ascii_case(x))
-    })
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ARCHIVE_EXTENSIONS.iter().any(|&x| ext.eq_ignore_ascii_case(x)))
 }
 const DEFAULT_ALBUM_NAME: &str = "single songs";
 
@@ -105,6 +105,9 @@ fn handle_dir(conf: &Conf) -> Result<(), Box<dyn Error>> {
             let path = entry.path();
             let _ = change_metadata(&conf.copy_from_file_path(path));
         });
+
+    println!("✅ Successfully updated metadata for dir: {}", conf);
+
     Ok(())
 }
 
@@ -182,13 +185,13 @@ fn song_handler(conf: &Conf) -> Result<(), Box<dyn Error>> {
                 file_path.to_str().unwrap_or_default(),
                 "-codec",
                 "copy",
-                &tmp_file.to_str().unwrap_or_default(),
+                tmp_file.to_str().unwrap_or_default(),
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()?;
 
-        fs::rename(&tmp_file, file_path)?;
+        fs::rename(tmp_file, file_path)?;
 
         lofty::read_from_path(file_path)
     })?;
@@ -240,7 +243,7 @@ fn process_tags(conf: &Conf, tagged_file: &mut TaggedFile, parent: &Path) -> Res
         Change::Disable => {},
         Change::Auto => {
             let album_name = dir_components
-                .get(0)
+                .first()
                 .map_or(DEFAULT_ALBUM_NAME.to_string(), |s| s.clean());
 
             let album_name = if album_name == DEFAULT_ALBUM_NAME {
@@ -306,7 +309,7 @@ fn save_and_move_file(conf: &Conf, tagged_file: TaggedFile, parent: &Path) -> Re
                     "-1",
                     "-c:a",
                     "copy",
-                    &tmp_file.to_str().unwrap_or_default(),
+                    tmp_file.to_str().unwrap_or_default(),
                     "-y",
                 ])
                 .stdout(Stdio::null())
