@@ -202,19 +202,19 @@ fn song_handler(conf: &Conf) -> Result<(), Box<dyn Error>> {
 }
 
 fn get_name_and_track_number(filename: &str, artist_name: &str) -> (Option<u32>, String) {
-    let filename = filename.replace(artist_name, "").replace('-', " ").trim().to_string();
+    let filename = filename.replace(artist_name, "").trim().to_string();
 
     // Pattern 1: 01) my song
     static RE1: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?x)(?P<track>\d{2})[^a-zA-Z]*(?P<name>[a-zA-Z0-9\(\)\[\],\s]+)").unwrap());
+        Lazy::new(|| Regex::new(r"(?x)(?P<track>\d{2})[^a-zA-Z]*(?P<name>[a-zA-Z0-9\(\)\[\],\-\s]+)").unwrap());
     if let Some(captures) = RE1.captures(&filename) {
         let track = captures.name("track").map(|m| m.as_str().parse().unwrap());
-        let name = captures.name("name").unwrap().as_str().trim().to_string();
+        let name = captures.name("name").unwrap().as_str().trim().replace("-", " ").to_string();
         return (track, name);
     }
 
     // Pattern 2: some text - name
-    static RE2: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?x)[a-zA-Z\& ]*-(?P<name>[a-zA-Z0-9 ]*)").unwrap());
+    static RE2: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?x)[a-zA-Z\s]*-(?P<name>[a-zA-Z0-9\(\)\[\],\-\s]+)").unwrap());
     if let Some(captures) = RE2.captures(&filename) {
         let name = captures.name("name").unwrap().as_str().trim().to_string();
         return (None, name);
